@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Emotion STGT Demo</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    video, canvas { position: absolute; top: 0; left: 0; }
+    #controls {
+      position: absolute; top: 10px; left: 10px;
+      background: rgba(255,255,255,0.8); padding: 8px; border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <button id="toggleLM">Вимкнути точки</button>
+  </div>
+  <video id="video" autoplay playsinline width="640" height="480"></video>
+  <canvas id="overlay" width="640" height="480"></canvas>
+
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+  <!-- MediaPipe FaceMesh -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
+  <script>
+  (async()=>{
+    // Параметри
+    const T = 30; // довжина послідовності кадрів
+    let buffer = [];
+    let showLandmarks = true;
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('overlay');
+    const ctx = canvas.getContext('2d');
+    const btn = document.getElementById('toggleLM');
+    btn.onclick = ()=> {
+      showLandmarks = !showLandmarks;
+      btn.textContent = showLandmarks ? 'Вимкнути точки' : 'Увімкнути точки';
+    };
+
+    // 1. Запит на камеру
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }});
+    video.srcObject = stream;
+    await video.play();
+
+    // 2. Завантажуємо TF.js модель (попередньо конвертували .h5 -> model.json+шари в каталозі /model)
+    const model = await tf.loadLayersModel('model/model.json');
+
+    // 3. Налаштовуємо MediaPipe FaceMesh
+    const faceMesh = new FaceMesh.FaceMesh({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+    });
+    faceMesh.setOptions({
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+    faceMesh.onResults(onResults);
+
+    // 4. Подаємо відео в MediaPipe циклічно
+    async function detectFrame() {
+      await faceMesh.send({image: video});
+      requestAnimationFrame(detectFrame);
+    }
+    detectFrame();
+
+    // 5. Обробка результатів
+    function onResults(results) {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      // малюємо відео як background (якщо треба)
+      // ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length) {
+        const lm = results.multiFaceLandmarks[0]; // 468 точок MediaPipe FaceMesh, перші 68 — обличчя
+        const face68 = lm.slice(0,68).map(p=>[p.x,p.y,p.z]);
+
+        // зберігаємо в буфер
+        buffer.push(face68);
+        if (buffer.length > T) buffer.shift();
+
+        // малюємо точки, якщо увімкнено
+        if (showLandmarks) {
+          drawingUtils.drawConnectors(ctx, lm, FaceMesh.FACEMESH_TESSELATION, {color: '#C0C0C0', lineWidth:1});
+          drawingUtils.drawLandmarks(ctx, lm.slice(0,68), {color: '#FF0000', lineWidth:2});
+        }
+
+        // якщо зібрали T кадрів — класифікуємо
+        if (buffer.length === T) classifySequence();
+      } else {
+        // якщо обличчя не знайдено — можна очищати буфер або продовжувати
+      }
+    }
+
+    // 6. Класифікація послідовності і attention
+    async function classifySequence() {
+      // готуємо тензор [1, T, 68, 3]
+      const seq = tf.tensor(buffer).expandDims(0); 
+      // [1,11] — ймовірності
+      const probs = model.predict(seq);
+      const arr = await probs.data();
+      seq.dispose();
+      probs.dispose();
+
+      // знаходимо клас
+      const emotionIdx = arr.indexOf(Math.max(...arr));
+      const emotions = ['neutral','happy','sad','surprise','fear','disgust','anger','contempt','unknown1','unknown2','unknown3'];
+      const label = emotions[emotionIdx];
+
+      // TODO: якщо ваша модель повертає attention-маску, тут її отримати й відмалювати
+      // наприклад:
+      // const [probs, attention] = model.execute( ... );
+      // малюємо attention як теплову карту поверх відео
+
+      // 7. Показуємо pop-up
+      const ok = confirm(`Модель вважає, що емоція — "${label}". Чи згодні ви?`);
+      console.log('User feedback:', ok);
+      
+      // очищаємо буфер, щоб не класифікувати повторно ті ж самі кадри
+      buffer = [];
+    }
+  })();
+  </script>
+</body>
+</html>
