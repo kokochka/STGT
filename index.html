@@ -15,7 +15,7 @@
 </head>
 <body>
   <div id="controls">
-    <button id="toggleLM">Вимкнути точки</button>
+    <button id="toggleLM">Remove landmarks</button>
   </div>
   <video id="video" autoplay playsinline width="640" height="480"></video>
   <canvas id="overlay" width="640" height="480"></canvas>
@@ -28,8 +28,8 @@
 
   <script>
   (async()=>{
-    // Параметри
-    const T = 30; // довжина послідовності кадрів
+ 
+    const T = 30; 
     let buffer = [];
     let showLandmarks = true;
     const video = document.getElementById('video');
@@ -41,15 +41,15 @@
       btn.textContent = showLandmarks ? 'Вимкнути точки' : 'Увімкнути точки';
     };
 
-    // 1. Запит на камеру
+    // camera access
     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }});
     video.srcObject = stream;
     await video.play();
 
-    // 2. Завантажуємо TF.js модель (попередньо конвертували .h5 -> model.json+шари в каталозі /model)
+    // Model TF.js upload (converted .h5 -> model.json+layers in the catalogue /model)
     const model = await tf.loadLayersModel('model/model.json');
 
-    // 3. Налаштовуємо MediaPipe FaceMesh
+    // 3. Set up MediaPipe FaceMesh
     const faceMesh = new FaceMesh.FaceMesh({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
     });
@@ -61,18 +61,18 @@
     });
     faceMesh.onResults(onResults);
 
-    // 4. Подаємо відео в MediaPipe циклічно
+    // 4. Push video through the MediaPipe 
     async function detectFrame() {
       await faceMesh.send({image: video});
       requestAnimationFrame(detectFrame);
     }
     detectFrame();
 
-    // 5. Обробка результатів
+    // 5. results processing
     function onResults(results) {
       ctx.clearRect(0,0,canvas.width,canvas.height);
       // малюємо відео як background (якщо треба)
-      // ctx.drawImage(video,0,0,canvas.width,canvas.height);
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
 
       if (results.multiFaceLandmarks && results.multiFaceLandmarks.length) {
         const lm = results.multiFaceLandmarks[0]; // 468 точок MediaPipe FaceMesh, перші 68 — обличчя
